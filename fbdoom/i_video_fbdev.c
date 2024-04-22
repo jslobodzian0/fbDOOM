@@ -44,6 +44,7 @@ rcsid[] = "$Id: i_x.c,v 1.6 1997/02/03 22:45:10 b1 Exp $";
 #include <stdarg.h>
 #include <sys/time.h>
 #include <sys/types.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
 #include <linux/fb.h>
 #include <sys/ioctl.h>
@@ -51,6 +52,7 @@ rcsid[] = "$Id: i_x.c,v 1.6 1997/02/03 22:45:10 b1 Exp $";
 //#define CMAP256
 
 struct fb_var_screeninfo fb = {};
+struct fb_fix_screeninfo fbfix = {};
 int fb_scaling = 1;
 int usemouse = 0;
 
@@ -157,18 +159,21 @@ void cmap_to_fb(uint8_t * out, uint8_t * in, int in_pixels)
         in++;
     }
 }
+static unsigned char* g_pFramebuffer = 0;
 
 void I_InitGraphics (void)
 {
     int i;
 
     /* Open fbdev file descriptor */
-    fd_fb = open("/dev/fb0", O_RDWR);
+    fd_fb = open("/dev/fb0", O_RDWR|O_SYNC);
     if (fd_fb < 0)
     {
         printf("Could not open /dev/fb0");
         exit(-1);
     }
+
+    ioctl(fd_fb, FBIOGET_FSCREENINFO, &fbfix);
 
     /* fetch framebuffer info */
     ioctl(fd_fb, FBIOGET_VSCREENINFO, &fb);
@@ -181,6 +186,17 @@ void I_InitGraphics (void)
             fb.red.length, fb.green.length, fb.blue.length, fb.transp.length, fb.red.offset, fb.green.offset, fb.blue.offset, fb.transp.offset);
 
     printf("I_InitGraphics: DOOM screen size: w x h: %d x %d\n", SCREENWIDTH, SCREENHEIGHT);
+
+    printf("I_InitGraphics: Caps=%x Sync=%x  Activate=%x  PixClock=%x\n", fbfix.capabilities, fb.sync, fb.activate, fb.pixclock);
+    printf("I_InitGraphics: smem_start=%lx  smem_len=%x  mmio_start=%lx  mmio_len=%x\n", fbfix.smem_start, fbfix.smem_len, fbfix.mmio_start, fbfix.mmio_len);
+
+    g_pFramebuffer = mmap(0, 0x300000, PROT_READ | PROT_WRITE, MAP_SHARED, fd_fb, 0);
+    if (g_pFramebuffer == -1)
+    {
+       printf("Could not map frame buffer.\n");
+       exit(-1);
+    }
+    printf("Frame Buffer=%p\n\n", g_pFramebuffer);
 
 
     i = M_CheckParmWithArgs("-scaling", 1);
@@ -442,8 +458,15 @@ void I_FinishUpdate (void)
     }
 
     /* Start drawing from y-offset */
-    lseek(fd_fb, y_offset * fb.xres, SEEK_SET);
-    write(fd_fb, I_VideoBuffer_FB, (SCREENHEIGHT * fb_scaling * (fb.bits_per_pixel/8)) * fb.xres); /* draw only portion used by doom + x-offsets */
+    /* Commenting out because this would not update screen unless there was character output followed by a newline */
+    /* Essentially changes were not flushed */
+    //lseek(fd_fb, y_offset * fb.xres, SEEK_SET);
+    //write(fd_fb, I_VideoBuffer_FB, (SCREENHEIGHT * fb_scaling * (fb.bits_per_pixel/8)) * fb.xres); /* draw only portion used by doom + x-offsets */ 
+    
+    unsigned char* pOut = g_pFramebuffer;
+    pOut+=y_offset*fb.xres;
+    int bufferSize = (SCREENHEIGHT*fb_scaling*(fb.bits_per_pixel/8))*fb.xres;
+    memcpy( pOut, I_VideoBuffer_FB, bufferSize);    
 }
 
 //
